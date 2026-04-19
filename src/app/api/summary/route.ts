@@ -31,20 +31,34 @@ export async function GET(request: Request) {
       const allPastTrans = pTrans.filter((t: any) => t.date.substring(0, 7) <= currentDateTarget)
                                  .sort((a: any, b: any) => a.date.localeCompare(b.date) || a.id - b.id);
       
-      let _stockAcum = 0;
       let costoPromedioConstante = 0;
 
+      // Agrupar transacciones historicas por YYYY-MM
+      const transByMonth: {[key: string]: any[]} = {};
       for(const t of allPastTrans) {
-        const qty = Number(t.quantity);
-        const totalBs = Number(t.total_bolivares);
-
-        if (t.type === 'entrada') {
-          const ns = _stockAcum + qty;
-          if (ns > 0) costoPromedioConstante = ((_stockAcum * costoPromedioConstante) + totalBs) / ns;
-          _stockAcum = ns;
-        } else {
-          _stockAcum -= qty;
-          if (_stockAcum < 0) _stockAcum = 0;
+        const m = t.date ? t.date.substring(0, 7) : '2000-01';
+        if(!transByMonth[m]) transByMonth[m] = [];
+        transByMonth[m].push(t);
+      }
+      
+      const sortedMonths = Object.keys(transByMonth).sort();
+      
+      for(const monthKey of sortedMonths) {
+        const monthTrans = transByMonth[monthKey];
+        const entradasDelMes = monthTrans.filter((t: any) => t.type === 'entrada');
+        
+        if (entradasDelMes.length > 0) {
+          let sumCostosNuevos = 0;
+          for(const e of entradasDelMes) {
+             const qty = Number(e.quantity);
+             const costoU = e.costo_unitario !== undefined && e.costo_unitario !== null ? Number(e.costo_unitario) : (Number(e.total_bolivares)/qty);
+             sumCostosNuevos += costoU;
+          }
+          if (costoPromedioConstante === 0) {
+              costoPromedioConstante = sumCostosNuevos / entradasDelMes.length;
+          } else {
+              costoPromedioConstante = (costoPromedioConstante + sumCostosNuevos) / (1 + entradasDelMes.length);
+          }
         }
       }
 

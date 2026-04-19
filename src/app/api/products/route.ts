@@ -12,10 +12,10 @@ export async function GET(request: Request) {
       const { data: prod, error: prodErr } = await supabase.from('products').select('*').eq('codigo', codigo).single();
       if (prodErr || !prod) return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 });
       
-      // CRITICO: MATEMATICA DE COSTO PROMEDIO PONDERADO MÓVIL
+      // CRITICO: MATEMATICA DE COSTO PROMEDIO GLOBAL MENSUAL (Opción B del Cliente)
       const { data: txs, error: txErr } = await supabase
         .from('transactions')
-        .select('type, quantity, total_bolivares')
+        .select('type, quantity, total_bolivares, date, costo_unitario')
         .eq('product_id', prod.id)
         .order('date', { ascending: true })
         .order('id', { ascending: true });
@@ -25,19 +25,44 @@ export async function GET(request: Request) {
       let stock = 0;
       let costoPromedio = 0;
 
+      // Agrupar transacciones por mes (Año-Mes)
+      const transByMonth: {[key: string]: any[]} = {};
       for (const t of txs || []) {
-        const qty = Number(t.quantity);
-        const totalBs = Number(t.total_bolivares);
-
-        if (t.type === 'entrada') {
-          const newStock = stock + qty;
-          if (newStock > 0) {
-            costoPromedio = ((stock * costoPromedio) + totalBs) / newStock;
+        const m = t.date ? t.date.substring(0, 7) : '2000-01';
+        if (!transByMonth[m]) transByMonth[m] = [];
+        transByMonth[m].push(t);
+      }
+      
+      const sortedMonths = Object.keys(transByMonth).sort();
+      
+      for(const monthKey of sortedMonths) {
+        const monthTrans = transByMonth[monthKey];
+        const entradasDelMes = monthTrans.filter((t: any) => t.type === 'entrada');
+        
+        // Calcular promedio del mes según la ecuación (Costo Inicial + Suples) / (1 + Suples)
+        if (entradasDelMes.length > 0) {
+          let sumCostosNuevos = 0;
+          for(const e of entradasDelMes) {
+             const qty = Number(e.quantity);
+             const costoU = e.costo_unitario ? Number(e.costo_unitario) : (Number(e.total_bolivares)/qty);
+             sumCostosNuevos += costoU;
           }
-          stock = newStock;
-        } else {
-          stock -= qty;
-          if (stock <= 0) stock = 0;
+          if (costoPromedio === 0) {
+              costoPromedio = sumCostosNuevos / entradasDelMes.length;
+          } else {
+              costoPromedio = (costoPromedio + sumCostosNuevos) / (1 + entradasDelMes.length);
+          }
+        }
+        
+        // Al final calcular stock sin acoplarlo al precio
+        for (const t of monthTrans) {
+           const qty = Number(t.quantity);
+           if (t.type === 'entrada') {
+             stock += qty;
+           } else {
+             stock -= qty;
+             if (stock < 0) stock = 0;
+           }
         }
       }
       
